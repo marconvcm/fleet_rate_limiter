@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class DefaultDistributedHighThroughputRateLimiter implements DistributedHighThroughputRateLimiter {
 
     public final static long EXPIRATION_TIME_SECONDS = 60; // 1 minute
-    public final static float RELAX_THRESHOLD_RATE = 0.02f; // 2% of the limit as block size, with min and max bounds.
+    public final static float RELAX_THRESHOLD_RATE = 0.10f; // 10% of the limit as block size, with min and max bounds.
     public final static int MIN_BLOCK_SIZE = 1;
     public final static int MAX_BLOCK_SIZE = 10_000;
 
