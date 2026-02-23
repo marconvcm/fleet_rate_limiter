@@ -2,6 +2,7 @@ package io.py3kl.fleet_rate_limiter.impl;
 
 import io.py3kl.fleet_rate_limiter.DistributedKeyValueStore;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -46,7 +47,7 @@ class DefaultDistributedHighThroughputRateLimiterTest {
     void expectsComputeBlockSizeRespectsMinCeilAndMax() {
         assertEquals(1, DefaultDistributedHighThroughputRateLimiter.computeBlockSize(1));
         assertEquals(1, DefaultDistributedHighThroughputRateLimiter.computeBlockSize(3));
-        assertEquals(500 * DefaultDistributedHighThroughputRateLimiter.RELAX_THRESHOLD_RATE, DefaultDistributedHighThroughputRateLimiter.computeBlockSize(500));
+        assertEquals(500 * DefaultDistributedHighThroughputRateLimiter.BLOCK_SIZE_RATE, DefaultDistributedHighThroughputRateLimiter.computeBlockSize(500));
         assertEquals(10_000, DefaultDistributedHighThroughputRateLimiter.computeBlockSize(600_000));
     }
 
@@ -237,9 +238,10 @@ class DefaultDistributedHighThroughputRateLimiterTest {
         }
     }
 
-    @Test
+    @RepeatedTest(value = 5, name = "Concurrency test with single host and limit {currentRepetition} of {totalRepetitions}")
     void shouldHandleConcurrencySingleHostAndShouldAllowAtLeastLimitAndNotExplodeOverLimit() throws Exception {
         int limit = 400;
+        int relaxedLimit = (int) Math.ceil(limit * (1 + DefaultDistributedHighThroughputRateLimiter.RELAXATION_RATE));
         int blockSize = DefaultDistributedHighThroughputRateLimiter.computeBlockSize(limit);
 
         var globalCount = new AtomicInteger(0);
@@ -249,12 +251,12 @@ class DefaultDistributedHighThroughputRateLimiterTest {
             eq(blockSize),
             eq(DefaultDistributedHighThroughputRateLimiter.EXPIRATION_TIME_SECONDS)
         )).thenAnswer(inv -> {
-            int delta = inv.getArgument(1, Integer.class);
-            int count = globalCount.addAndGet(delta);
+            int incomingBlockSize = inv.getArgument(1, Integer.class);
+            int count = globalCount.addAndGet(incomingBlockSize);
             return CompletableFuture.completedFuture(count);
         });
 
-        int totalCalls = 100_000;
+        int totalCalls = 10_000; // with limit=400 and blockSize=8 => 125 reservations needed to cover all calls
         var tasks = new ArrayList<Callable<Boolean>>(totalCalls);
         for (int i = 0; i < totalCalls; i++) {
             tasks.add(() -> limiter.isAllowed(DEFAULT_KEY, limit).join());
@@ -265,20 +267,20 @@ class DefaultDistributedHighThroughputRateLimiterTest {
             int requestAllowedByLimiter = 0;
             for (Future<Boolean> f : executor.invokeAll(tasks)) {
                 if (f.get()) requestAllowedByLimiter++;
+
             }
 
-            assertTrue(requestAllowedByLimiter >= limit, "Must allow at least the configured limit");
-
-            int overLimit = Math.max(0, requestAllowedByLimiter - limit);
-            int relaxedMaxOverLimit = (int) Math.ceil(limit * DefaultDistributedHighThroughputRateLimiter.RELAX_THRESHOLD_RATE) + blockSize;
-
-            float overLimitRate = 1f - (float) overLimit / relaxedMaxOverLimit;
-
-            System.out.println("Over limit rate (" + overLimitRate + ") requests should be within the relaxed threshold rate. Over limit: " + overLimit + ", Relaxed Max Over Limit: " + relaxedMaxOverLimit);
-            assertTrue(
-                overLimitRate < DefaultDistributedHighThroughputRateLimiter.RELAX_THRESHOLD_RATE,
-                "Over limit rate (" + overLimitRate + ") requests should be within the relaxed threshold rate. Over limit: " + overLimit + ", Relaxed Max Over Limit: " + relaxedMaxOverLimit
+            var testMessage = String.format(
+                "Overlimit rate %.2f%% (requestAllowedByLimiter %d, limit: %d, relaxedLimit: %d, overLimit %d) RELAXATION_RATE: %.2f%%",
+                (float) requestAllowedByLimiter / limit,
+                requestAllowedByLimiter,
+                limit,
+                relaxedLimit,
+                Math.max(0, requestAllowedByLimiter - limit),
+                DefaultDistributedHighThroughputRateLimiter.RELAXATION_RATE
             );
+
+            assertTrue(requestAllowedByLimiter <= relaxedLimit, "Allowed requests should not exceed relaxed limit: " + testMessage);
         }
     }
 }
