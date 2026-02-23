@@ -48,6 +48,7 @@ class DefaultDistributedHighThroughputRateLimiterTest {
         assertEquals(1, DefaultDistributedHighThroughputRateLimiter.computeBlockSize(1));
         assertEquals(1, DefaultDistributedHighThroughputRateLimiter.computeBlockSize(3));
         assertEquals(500 * DefaultDistributedHighThroughputRateLimiter.BLOCK_SIZE_RATE, DefaultDistributedHighThroughputRateLimiter.computeBlockSize(500));
+        assertEquals(500 * (1 + DefaultDistributedHighThroughputRateLimiter.RELAXATION_RATE), DefaultDistributedHighThroughputRateLimiter.computeRelaxedLimit(500));
         assertEquals(10_000, DefaultDistributedHighThroughputRateLimiter.computeBlockSize(600_000));
     }
 
