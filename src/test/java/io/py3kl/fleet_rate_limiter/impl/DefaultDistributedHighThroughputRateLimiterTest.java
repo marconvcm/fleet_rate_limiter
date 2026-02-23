@@ -121,7 +121,7 @@ class DefaultDistributedHighThroughputRateLimiterTest {
     @Test
     void expectsIsAllowedDeniesWhenPreviousCountIsAtOrAboveLimit() throws Exception {
         int limit = 500;
-        int relaxedLimit = limit + DefaultDistributedHighThroughputRateLimiter.computeBlockSize(limit);
+        int relaxedLimit = limit + DefaultDistributedHighThroughputRateLimiter.computeRelaxedLimit(limit);
         int blockSize = DefaultDistributedHighThroughputRateLimiter.computeBlockSize(limit);
 
         // previousCount = count - blockSize = 500 => not allowed
