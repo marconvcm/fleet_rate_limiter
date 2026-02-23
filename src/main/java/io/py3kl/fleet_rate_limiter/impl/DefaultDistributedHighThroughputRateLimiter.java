@@ -40,13 +40,19 @@ public final class DefaultDistributedHighThroughputRateLimiter implements Distri
 
         var state = states.computeIfAbsent(key, providedKey -> new RequestState());
 
+        return isAllowed(state, key, limit);
+    }
+
+    private CompletableFuture<Boolean> isAllowed(RequestState state, String key, int limit) {
+
         if (tryConsumeLocal(state)) {
             return CompletableFuture.completedFuture(true);
         }
 
         return consumeDistributed(state, key, limit)
-            .thenApply(reservationResult -> reservationResult.allowed);
+            .thenApply(ignored -> tryConsumeLocal(state));
     }
+
 
     private CompletableFuture<ReservationResult> consumeDistributed(RequestState state, String key, int limit) {
 
@@ -86,11 +92,12 @@ public final class DefaultDistributedHighThroughputRateLimiter implements Distri
                             return;
                         }
 
+                        int relaxedLimit = computeRelaxedLimit(limit);
                         int previousCount = count - blockSize;
-                        boolean allowed = previousCount < limit;
+                        boolean allowed = previousCount < relaxedLimit;
 
                         if (allowed) {
-                            int requestPermits = Math.min(blockSize, limit - previousCount);
+                            int requestPermits = Math.min(blockSize, relaxedLimit - previousCount);
                             state.remainingPermits.addAndGet(requestPermits);
                         }
 
@@ -108,6 +115,10 @@ public final class DefaultDistributedHighThroughputRateLimiter implements Distri
     public static int computeBlockSize(int limit) {
         int fraction = Math.max(MIN_BLOCK_SIZE, (int) (limit * BLOCK_SIZE_RATE));
         return Math.min(MAX_BLOCK_SIZE, fraction);
+    }
+
+    static int computeRelaxedLimit(int limit) {
+        return (int) Math.ceil(limit * (1 + RELAXATION_RATE));
     }
 
     private static boolean tryConsumeLocal(RequestState state) {

@@ -82,7 +82,7 @@ class DefaultDistributedHighThroughputRateLimiterTest {
 
         assertTrue(limiter.isAllowed(DEFAULT_KEY, limit).join());
 
-        for (int i = 0; i < blockSize * numberOfFlightsExpected; i++) {
+        for (int i = 0; i < blockSize * (numberOfFlightsExpected - 1); i++) {
             assertTrue(limiter.isAllowed(DEFAULT_KEY, limit).join());
         }
 
@@ -121,12 +121,13 @@ class DefaultDistributedHighThroughputRateLimiterTest {
     @Test
     void expectsIsAllowedDeniesWhenPreviousCountIsAtOrAboveLimit() throws Exception {
         int limit = 500;
+        int relaxedLimit = limit + DefaultDistributedHighThroughputRateLimiter.computeBlockSize(limit);
         int blockSize = DefaultDistributedHighThroughputRateLimiter.computeBlockSize(limit);
 
         // previousCount = count - blockSize = 500 => not allowed
         when(keyValueStore.incrementByAndExpire(eq(DEFAULT_KEY), eq(blockSize),
             eq(DefaultDistributedHighThroughputRateLimiter.EXPIRATION_TIME_SECONDS)))
-            .thenReturn(CompletableFuture.completedFuture(limit + blockSize));
+            .thenReturn(CompletableFuture.completedFuture(relaxedLimit + blockSize));
 
         assertFalse(limiter.isAllowed(DEFAULT_KEY, limit).join());
 
@@ -199,34 +200,38 @@ class DefaultDistributedHighThroughputRateLimiterTest {
             eq(DefaultDistributedHighThroughputRateLimiter.EXPIRATION_TIME_SECONDS)
         )).thenReturn(CompletableFuture.completedFuture(blockSize));
 
-        int threads = 8;
-        int tasks = 100;
-
+        int totalCalls = 100;
 
         var startGate = new CountDownLatch(1);
-        var doneGate = new CountDownLatch(tasks);
+        var doneGate = new CountDownLatch(totalCalls);
 
         var results = new ConcurrentLinkedQueue<Boolean>();
 
-        try (var executor = Executors.newFixedThreadPool(threads)) {
+        var tasks = new ArrayList<Runnable>(totalCalls);
 
-            for (int i = 0; i < tasks; i++) {
-                executor.submit(() -> {
-                    try {
-                        startGate.await();
-                        results.add(limiter.isAllowed(DEFAULT_KEY, limit).join());
-                    } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
-                    } finally {
-                        doneGate.countDown();
-                    }
-                });
+        for (int i = 0; i < totalCalls; i++) {
+            tasks.add(() -> {
+                try {
+                    startGate.await();
+                    results.add(limiter.isAllowed(DEFAULT_KEY, limit).join());
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                } finally {
+                    doneGate.countDown();
+                }
+            });
+        }
+
+        try (var executor = Executors.newWorkStealingPool()) {
+
+            for(Runnable task : tasks){
+                executor.submit(task);
             }
 
             startGate.countDown();
             assertTrue(doneGate.await(3, TimeUnit.SECONDS), "Tasks did not finish in time");
 
-            assertEquals(tasks, results.size());
+            assertEquals(tasks.size(), results.size());
             assertTrue(results.stream().allMatch(Boolean::booleanValue));
 
             verify(keyValueStore, times(1)).incrementByAndExpire(
@@ -238,7 +243,7 @@ class DefaultDistributedHighThroughputRateLimiterTest {
         }
     }
 
-    @RepeatedTest(value = 5, name = "Concurrency test with single host and limit {currentRepetition} of {totalRepetitions}")
+    @RepeatedTest(value = 10, name = "Concurrency test with single host and limit {currentRepetition} of {totalRepetitions}")
     void shouldHandleConcurrencySingleHostAndShouldAllowAtLeastLimitAndNotExplodeOverLimit() throws Exception {
         int limit = 400;
         int relaxedLimit = (int) Math.ceil(limit * (1 + DefaultDistributedHighThroughputRateLimiter.RELAXATION_RATE));
@@ -256,7 +261,7 @@ class DefaultDistributedHighThroughputRateLimiterTest {
             return CompletableFuture.completedFuture(count);
         });
 
-        int totalCalls = 10_000; // with limit=400 and blockSize=8 => 125 reservations needed to cover all calls
+        int totalCalls = 100_000;
         var tasks = new ArrayList<Callable<Boolean>>(totalCalls);
         for (int i = 0; i < totalCalls; i++) {
             tasks.add(() -> limiter.isAllowed(DEFAULT_KEY, limit).join());
@@ -267,7 +272,6 @@ class DefaultDistributedHighThroughputRateLimiterTest {
             int requestAllowedByLimiter = 0;
             for (Future<Boolean> f : executor.invokeAll(tasks)) {
                 if (f.get()) requestAllowedByLimiter++;
-
             }
 
             var testMessage = String.format(
