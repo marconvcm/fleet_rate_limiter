@@ -12,6 +12,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public final class DefaultDistributedHighThroughputRateLimiter implements DistributedHighThroughputRateLimiter {
 
+    private static final String KEY_ILLEGAL_ARGUMENT_MESSAGE = "Key must not be null or empty";
+    private static final String LIMIT_ILLEGAL_ARGUMENT_MESSAGE = "Limit must be greater than 0";
+
     public final static long EXPIRATION_TIME_SECONDS = 60; // 1 minute
     public final static float BLOCK_SIZE_RATE = 0.10f; // 10% of the limit as block size, with min and max bounds.
     public final static float RELAXATION_RATE = 0.10f; // 10% of the limit as relaxation threshold for local consumption.
@@ -31,11 +34,11 @@ public final class DefaultDistributedHighThroughputRateLimiter implements Distri
     public CompletableFuture<Boolean> isAllowed(final String key, final int limit) {
 
         if (key == null || key.isEmpty()) {
-            throw new IllegalArgumentException("Key must not be null or empty");
+            throw new IllegalArgumentException(KEY_ILLEGAL_ARGUMENT_MESSAGE);
         }
 
         if (limit <= 0) {
-            throw new IllegalArgumentException("Limit must be greater than 0");
+            throw new IllegalArgumentException(LIMIT_ILLEGAL_ARGUMENT_MESSAGE);
         }
 
         var state = states.computeIfAbsent(key, providedKey -> new RequestState());
